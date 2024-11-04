@@ -66,6 +66,7 @@ def metode_anp(array):
 
 def codas_norm(matrix_al, statuses, weights):
    
+   #code untuk membalikkan array guna untuk mengambil nilai per kriteria
     matrix = []
     for i in range(len(matrix_al[0])):
         new_row = []

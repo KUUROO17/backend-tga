@@ -236,6 +236,35 @@ def data_alternatif_lihat(kode):
 
     return jsonify(result)
 
+@app.route('/data-alternatif-hasil/<int:id_user>', methods=['GET'])
+def data_alternatif_lihat_hasil(id_user):
+    try:
+        cur = mysql.connection.cursor()
+        cur.execute('SELECT * FROM hasil WHERE id_user=%s', (id_user,))
+
+        # Mendapatkan nama kolom dari atribut description
+        column_names = [desc[0] for desc in cur.description]
+
+        data = cur.fetchall()
+        cur.close()
+
+        result = {
+            'data': []
+        }
+
+        for row in data:
+            row_dict = {}
+            for i in range(len(column_names)):
+                row_dict[column_names[i]] = row[i]
+            result['data'].append(row_dict)
+
+        return jsonify(result)
+    except Exception as e:
+        print('Error:', e)
+        return jsonify({"message": "Terjadi kesalahan"}), 500
+
+
+
 
 #menambahkan data alternatif
 @app.route('/data-alternatif', methods=['POST'])
@@ -409,63 +438,90 @@ def hapus_semua_perbandingan():
 
 
 
+# @app.route('/test-ambil', methods=['GET'])
+# def cok():
+#     cur = mysql.connection.cursor()
+#     cur.execute('''SELECT kode FROM kriteria''')
+
+#     # Mendapatkan nama kolom dari atribut description
+#     column_names = [desc[0] for desc in cur.description]
+
+#     data = cur.fetchall()
+#     cur.close()
+
+#     result = {
+#         'data': []
+#     }
+
+#     for row in data:
+#         row_dict = {}
+#         for i in range(len(column_names)):
+#             row_dict[column_names[i]] = row[i]
+#         result['data'].append(row_dict)
+
+#     return jsonify(result)
+
 
 #untuk menambahkan nilai bobot ke dalam tabel
 @app.route('/ambil_nilai_perbandingan', methods=['GET'])
 def ambil_nilai_perbandingan():
     try:
-        # Ambil data kriteria dari API
-        response_kriteria = requests.get('http://192.168.169.65:5000/data-kriteria')
-        if response_kriteria.status_code == 200:
-            data_kriteria = response_kriteria.json()['data']
+        # Retrieve kriteria data from the kriteria table
+        cur = mysql.connection.cursor()
+        cur.execute("SELECT kode FROM kriteria")
+        data_kriteria = cur.fetchall()
+        cur.close()
 
-            # Ambil data perbandingan dari API
-            response_perbandingan = requests.get('http://192.168.169.65:5000/simpan_perbandingan')
-            if response_perbandingan.status_code == 200:
-                data_perbandingan = response_perbandingan.json()['data']
-                nilai_perbandingan = [item['nilai_perbandingan'] for item in data_perbandingan]
+        # Retrieve perbandingan data from the nilai_kriteria table
+        cur = mysql.connection.cursor()
+        cur.execute("SELECT nilai_perbandingan FROM nilai_kriteria")
+        data_perbandingan = cur.fetchall()
+        cur.close()
 
-                # Proses data perbandingan dan tambahkan id_kriteria sesuai dengan kode kriteria
-                matrix_normalized = metode_anp(nilai_perbandingan)
-                for i, value in enumerate(matrix_normalized):
-                    kode_kriteria = data_kriteria[i]['kode']
-                    # Cari id_kriteria berdasarkan kode_kriteria
+        nilai_perbandingan = [item[0] for item in data_perbandingan]
+
+        # Process perbandingan data and add id_kriteria based on kode
+        matrix_normalized = metode_anp(nilai_perbandingan)
+        for i, value in enumerate(matrix_normalized):
+            kode_kriteria = data_kriteria[i][0]
+            
+            # Retrieve id_kriteria based on kode_kriteria
+            cur = mysql.connection.cursor()
+            cur.execute(f"SELECT kode FROM kriteria WHERE kode = '{kode_kriteria}'")
+            result = cur.fetchone()
+            cur.close()
+
+            if result:
+                id_kriteria = result[0]
+                
+                # Check if bobot value for kriteria exists in nilai_bobot table
+                cur = mysql.connection.cursor()
+                cur.execute(f"SELECT id_kriteria FROM nilai_bobot WHERE id_kriteria = '{id_kriteria}'")
+                existing_bobot = cur.fetchone()
+                cur.close()
+
+                if existing_bobot:
+                    # If bobot value exists, update bobot value
+                    update_query = f"UPDATE nilai_bobot SET value = {value} WHERE id_kriteria = '{id_kriteria}'"
                     cur = mysql.connection.cursor()
-                    cur.execute(f"SELECT kode FROM kriteria WHERE kode = '{kode_kriteria}'")
-                    result = cur.fetchone()
+                    cur.execute(update_query)
+                    mysql.connection.commit()
+                    cur.close()
+                else:
+                    # If bobot value doesn't exist, insert bobot value
+                    insert_query = f"INSERT INTO nilai_bobot (id_kriteria, value) VALUES ('{id_kriteria}', {value})"
+                    cur = mysql.connection.cursor()
+                    cur.execute(insert_query)
+                    mysql.connection.commit()
                     cur.close()
 
-                    if result:
-                        id_kriteria = result[0]
-                        # Periksa apakah nilai bobot untuk kriteria sudah ada di tabel nilai_bobot
-                        cur = mysql.connection.cursor()
-                        cur.execute(f"SELECT id_kriteria FROM nilai_bobot WHERE id_kriteria = '{id_kriteria}'")
-                        existing_bobot = cur.fetchone()
-                        cur.close()
+        return jsonify(matrix_normalized)
 
-                        if existing_bobot:
-                            # Jika nilai bobot sudah ada, update nilai bobot
-                            update_query = f"UPDATE nilai_bobot SET value = {value} WHERE id_kriteria = '{id_kriteria}'"
-                            cur = mysql.connection.cursor()
-                            cur.execute(update_query)
-                            mysql.connection.commit()
-                            cur.close()
-                        else:
-                            # Jika nilai bobot belum ada, insert nilai bobot
-                            insert_query = f"INSERT INTO nilai_bobot (id_kriteria, value) VALUES ('{id_kriteria}', {value})"
-                            cur = mysql.connection.cursor()
-                            cur.execute(insert_query)
-                            mysql.connection.commit()
-                            cur.close()
+    except mysql.connector.Error as err:
+        return jsonify({'error': f'Error while accessing database: {str(err)}'})
 
-                return jsonify(matrix_normalized)
-
-        return jsonify({'error': 'Terjadi kesalahan saat mengambil data perbandingan'})
-
-    except requests.exceptions.RequestException as e:
-        return jsonify({'error': f'Terjadi kesalahan saat menghubungi server: {str(e)}'})
-
-
+    except Exception as e:
+        return jsonify({'error': f'An error occurred: {str(e)}'})
 
 
 
@@ -582,76 +638,133 @@ def metodeKODAS(id_user, id_alternatif):
 
 
 
+# @app.route('/data_per_alternatif/<int:id_user>', methods=['GET'])
+# def data_per_alternatif(id_user):
+#     try:
+#         # Mengambil data penilaian dari tabel penilaian
+#         cur = mysql.connection.cursor()
+#         cur.execute(f"SELECT id_alternatif,nilai FROM penilaian WHERE id_user = {id_user}")
+#         data_penilaian = cur.fetchall()
+#         cur.close()
+
+#         # Mengambil data kriteria dari tabel kriteria
+#         cur = mysql.connection.cursor()
+#         cur.execute("SELECT nama, status FROM kriteria")
+#         data_kriteria = cur.fetchall()
+#         cur.close()
+
+#         status_kriteria = get_kriteria_status(data_kriteria)
+#         grouped_data = group_values_by_alternatif(data_penilaian)
+
+#         # Mengambil data nilai bobot dari tabel nilai_bobot
+#         cur = mysql.connection.cursor()
+#         cur.execute("SELECT value FROM nilai_bobot")
+#         nilai_perbandingan = [item[0] for item in cur.fetchall()]
+#         cur.close()
+
+#         matriks_normalisasi, matriks_negatif, euclidian, taxicap, matriks_relativ_assesment, nilai_score = codas_norm(grouped_data, status_kriteria, nilai_perbandingan)
+
+#         cur = mysql.connection.cursor()
+#         cur.execute(f"SELECT kode FROM alternatif WHERE id_user = {id_user}")
+#         result = cur.fetchall()
+
+#         for i, nilai in enumerate(nilai_score):
+#             if i < len(result):
+#                 kode_alternatif = result[i][0]
+#                 id_alternatif = kode_alternatif
+#                 cur.execute(f"SELECT * FROM hasil WHERE id_user = {id_user} AND id_alternatif = '{id_alternatif}'")
+#                 existing_data = cur.fetchone()
+#                 if existing_data:
+#                     update_query = f"UPDATE hasil SET value = '{nilai}' WHERE id_user = {id_user} AND id_alternatif = '{id_alternatif}'"
+#                     cur.execute(update_query)
+#                 else:
+#                     insert_query = f"INSERT INTO hasil (id_user, id_alternatif, value) VALUES ({id_user}, '{id_alternatif}', '{nilai}')"
+#                     cur.execute(insert_query)
+
+#         mysql.connection.commit()
+#         cur.close()
+
+#         return jsonify({"matriks_normalisasi": matriks_normalisasi, "matriks_negatif": matriks_negatif, "euclidian": euclidian, "taxicap": taxicap, "matriks_relativ_assesment": matriks_relativ_assesment, "nilai score": nilai_score})
+#     except mysql.connector.Error as err:
+#         return jsonify({'error': f'Error while accessing database: {str(err)}'})
+#     except Exception as e:
+#         return jsonify({'error': f'An error occurred: {str(e)}'})
 
 
 @app.route('/data_per_alternatif/<int:id_user>', methods=['GET'])
-def data_per_alternatif(id_user):
-    url_penilaian = f"http://192.168.169.65:5000/penilaian/{id_user}"
-    url_kriteria = "http://192.168.169.65:5000/data-kriteria"
-    url_nilai_perbandingan = "http://192.168.169.65:5000/ambil_nilai_perbandingan"
-    
-    response_penilaian = requests.get(url_penilaian)
-    response_kriteria = requests.get(url_kriteria)
-    response_nilai_perbandingan = requests.get(url_nilai_perbandingan)
+def data_per(id_user):
+    try:
+        # Mengambil data penilaian dari tabel penilaian
+        cur = mysql.connection.cursor()
+        cur.execute(f"SELECT id_alternatif, nilai FROM penilaian WHERE id_user = {id_user}")
+        data_penilaian = cur.fetchall()
+        cur.close()
 
-    if (
-        response_penilaian.status_code == 200
-        and response_kriteria.status_code == 200
-        and response_nilai_perbandingan.status_code == 200
-    ):
-        data_penilaian = response_penilaian.json()
-        data_kriteria = response_kriteria.json()
-        status_kriteria = get_kriteria_status(data_kriteria["data"])
-        print(status_kriteria)
-        grouped_data = group_values_by_alternatif(data_penilaian["data"])
+        # Mengambil data kriteria dari tabel kriteria
+        cur = mysql.connection.cursor()
+        cur.execute("SELECT nama, status FROM kriteria")
+        data_kriteria = cur.fetchall()
+        cur.close()
+
+        # Mengambil data nilai bobot dari tabel nilai_bobot
+        cur = mysql.connection.cursor()
+        cur.execute("SELECT value FROM nilai_bobot")
+        nilai_perbandingan = [item[0] for item in cur.fetchall()]
+        cur.close()
+
+        # Memperbaiki pemrosesan status kriteria dan pengelompokan data
+        status_kriteria = get_kriteria_status(data_kriteria)
+        grouped_data = group_values_by_alternatif(data_penilaian)
         print(grouped_data)
-        nilai_perbandingan = response_nilai_perbandingan.json()
+        print(status_kriteria)
+
         matriks_normalisasi, matriks_negatif, euclidian, taxicap, matriks_relativ_assesment, nilai_score = codas_norm(grouped_data, status_kriteria, nilai_perbandingan)
 
         cur = mysql.connection.cursor()
-        # Query SELECT untuk mencari id_alternatif berdasarkan kode dari tabel alternatif dengan kondisi WHERE id_user
         cur.execute(f"SELECT kode FROM alternatif WHERE id_user = {id_user}")
-        result = cur.fetchall()  # Ambil semua baris hasil dari query
+        result = cur.fetchall()
 
         for i, nilai in enumerate(nilai_score):
-            if i < len(result):  # Pastikan i tidak melebihi jumlah kode alternatif yang ditemukan
+            if i < len(result):
                 kode_alternatif = result[i][0]
-                id_alternatif = kode_alternatif  # Jika tabel alternatif memiliki kolom id_alternatif, gunakan kolom tersebut
-                # Query SELECT untuk mencari data dari tabel hasil dengan kondisi WHERE id_user dan id_alternatif
+                id_alternatif = kode_alternatif
                 cur.execute(f"SELECT * FROM hasil WHERE id_user = {id_user} AND id_alternatif = '{id_alternatif}'")
                 existing_data = cur.fetchone()
                 if existing_data:
-                    # Jika data sudah ada, lakukan update nilai pada kolom value
                     update_query = f"UPDATE hasil SET value = '{nilai}' WHERE id_user = {id_user} AND id_alternatif = '{id_alternatif}'"
                     cur.execute(update_query)
                 else:
-                    # Jika data belum ada, masukkan data baru
                     insert_query = f"INSERT INTO hasil (id_user, id_alternatif, value) VALUES ({id_user}, '{id_alternatif}', '{nilai}')"
                     cur.execute(insert_query)
 
         mysql.connection.commit()
         cur.close()
-
-        return jsonify({"matriks_normalisasi" : matriks_normalisasi, "matriks_negatif" : matriks_negatif, "euclidian" : euclidian, "taxicap": taxicap, "matriks relativ assesment" : matriks_relativ_assesment, "nilai score" : nilai_score})
-    else:
-        return jsonify({"error": "Gagal mendapatkan data dari API"}), 500
-
-
+        # return jsonify({"data_penilaian": data_penilaian, "data_kriteria": data_kriteria, "nilai_perbandingan": nilai_perbandingan})
+        return jsonify({"matriks_normalisasi": matriks_normalisasi, "matriks_negatif": matriks_negatif, "euclidian": euclidian, "taxicap": taxicap, "matriks_relativ_assesment": matriks_relativ_assesment, "nilai score": nilai_score})
+    except mysql.connector.Error as err:
+        return jsonify({'error': f'Error while accessing database: {str(err)}'})
+    except Exception as e:
+        return jsonify({'error': f'An error occurred: {str(e)}'})
 
 def group_values_by_alternatif(data):
     grouped_data = {}
     for item in data:
-        id_alternatif = item["id_alternatif"]
+        id_alternatif = item[0]  # Menggunakan index 0 untuk id_alternatif
+        nilai = item[1]  # Menggunakan index 1 untuk nilai
         if id_alternatif not in grouped_data:
             grouped_data[id_alternatif] = []
-        grouped_data[id_alternatif].append(item["nilai"])
+        grouped_data[id_alternatif].append(nilai)
     return list(grouped_data.values())
+
 
 def get_kriteria_status(data):
     status_kriteria = {}
     for item in data:
-        status_kriteria[item["nama"]] = item["status"]
+        nama_kriteria = item[0]  # Menggunakan index 0 untuk nama
+        status = item[1]  # Menggunakan index 1 untuk status
+        status_kriteria[nama_kriteria] = status
     return list(status_kriteria.values())
+
 
 
 @app.route('/lihat-penilaian', methods=['GET'])
@@ -682,4 +795,4 @@ def lihat_penilaian():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, host='192.168.169.65', port=5000)
+    app.run(debug=True, host='192.168.239.65', port=5000)
